@@ -22,6 +22,7 @@ void drawUI();
 
 ew::Camera camera;
 ew::CameraController cameraController;
+ew::Transform monkeyTransform;
 
 //Global state
 int screenWidth = 1080;
@@ -36,39 +37,47 @@ struct Material {
 	float Shininess = 128;
 }material;
 
+struct EdgeDetect {
+	bool enabled = 1;
+}edge;
+
 int main() {
 	GLFWwindow* window = initWindow("Assignment 0", screenWidth, screenHeight);
 	glfwSetFramebufferSizeCallback(window, framebufferSizeCallback);
 
-	glEnable(GL_CULL_FACE);
-	glCullFace(GL_BACK); //Back face culling
-	glEnable(GL_DEPTH_TEST); //Depth testing
+	// Init shaders and model
+	ew::Shader litShader = ew::Shader("assets/lit.vert", "assets/lit.frag");
+	ew::Shader convolutionShader = ew::Shader("assets/blur.vert", "assets/blur.frag");
+	ew::Model monkeyModel = ew::Model("assets/suzanne.obj");
+
+	// Setup Camera
+	camera.position = glm::vec3(0.0f, 0.0f, 5.0f);
+	camera.target = glm::vec3(0.0f, 0.0f, 0.0f);
+	camera.aspectRatio = (float)screenWidth / screenHeight;
+	camera.fov = 60.0f;
 
 	// Create Framebuffer
-	tslib::Framebuffer fb = tslib::createFramebuffer(screenWidth, screenHeight, GL_RGBA8);
+	tslib::Framebuffer fb = tslib::createFramebuffer(screenWidth, screenHeight, GL_RGBA16);
 
+	// Check for complete framebuffer
 	GLenum fboStatus = glCheckFramebufferStatus(GL_FRAMEBUFFER);
 	if (fboStatus != GL_FRAMEBUFFER_COMPLETE) {
 		printf("Framebuffer incomplete: %d", fboStatus);
 	}
 
+	// Create Dummy VAO
 	unsigned int dummyVAO;
 	glCreateVertexArrays(1, &dummyVAO);
-
-	ew::Shader litShader = ew::Shader("assets/lit.vert", "assets/lit.frag");
-	ew::Model monkeyModel = ew::Model("assets/suzanne.obj");
-
-	ew::Shader screenShader = ew::Shader("assets/screen.vert", "assets/temp.frag");
-
-	camera.position = glm::vec3(0.0f, 0.0f, 5.0f);
-	camera.target = glm::vec3(0.0f, 0.0f, 0.0f); // Look at the center of the scene
-	camera.aspectRatio = (float)screenWidth / screenHeight;
-	camera.fov = 60.0f; // Vertical field of view, in degrees
 
 	// Handles to OpenGL object are unsigned integers
 	GLuint brickTexture = ew::loadTexture("assets/brick_color.jpg");
 
-	ew::Transform monkeyTransform;
+	GLenum attachments[] = { GL_COLOR_ATTACHMENT0 };
+	glDrawBuffers(1, attachments);
+
+	glEnable(GL_CULL_FACE);
+	glCullFace(GL_BACK);
+	glEnable(GL_DEPTH_TEST);
 
 	while (!glfwWindowShouldClose(window)) {
 		glfwPollEvents();
@@ -79,12 +88,14 @@ int main() {
 
 		cameraController.move(window, &camera, deltaTime);
 
-		//RENDER
+		// Rotate model around Y axis
+		monkeyTransform.rotation = glm::rotate(monkeyTransform.rotation, deltaTime, glm::vec3(0.0, 1.0, 0.0));
+
+		// Bind framebuffer
 		glBindFramebuffer(GL_FRAMEBUFFER, fb.fbo);
 		glViewport(0, 0, fb.width, fb.height);
 		glClearColor(0.6f,0.8f,0.92f,1.0f);
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-		glEnable(GL_DEPTH_TEST);
 
 		//Bind brick texture to texture unit 0 
 		glActiveTexture(GL_TEXTURE0);
@@ -94,7 +105,7 @@ int main() {
 		litShader.use();
 		litShader.setVec3("_EyePos", camera.position);
 		litShader.setInt("_MainTex", 0);
-		litShader.setMat4("_Model", glm::mat4(1.0f));
+		litShader.setMat4("_Model", monkeyTransform.modelMatrix());
 		litShader.setMat4("_ViewProjection", camera.projectionMatrix() * camera.viewMatrix());
 
 		litShader.setFloat("_Material.Ka", material.Ka);
@@ -102,31 +113,29 @@ int main() {
 		litShader.setFloat("_Material.Ks", material.Ks);
 		litShader.setFloat("_Material.Shininess", material.Shininess);
 
-		// Rotate model around Y axis
-		monkeyTransform.rotation = glm::rotate(monkeyTransform.rotation, deltaTime, glm::vec3(0.0, 1.0, 0.0));
-
-		// transform.modelMatrix() combines translation, rotation, and scale into a 4x4 model matrix
-		litShader.setMat4("_Model", monkeyTransform.modelMatrix());
-
 		monkeyModel.draw(); // Draws monkey model using current shader
 
+		// Bind
 		glBindFramebuffer(GL_FRAMEBUFFER, 0);
 		glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
-		glClear(GL_COLOR_BUFFER_BIT);
+		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-		screenShader.use();
-		screenShader.setInt("_ColorBuffer", *fb.colorBuffer);
+		convolutionShader.use();
+		convolutionShader.setInt("_Enabled", edge.enabled);
 
+
+		glBindTextureUnit(0, fb.colorBuffer);
 		glBindVertexArray(dummyVAO);
-		glDisable(GL_DEPTH_TEST);
-		glBindTextureUnit(0, *fb.colorBuffer);
-
 		glDrawArrays(GL_TRIANGLES, 0, 3);
 
 		drawUI();
 
 		glfwSwapBuffers(window);
+		glfwPollEvents();
 	}
+
+	glad_glDeleteFramebuffers(1, &fb.fbo);
+
 	printf("Shutting down...");
 }
 
@@ -151,6 +160,10 @@ void drawUI() {
 		ImGui::SliderFloat("DiffuseK", &material.Kd, 0.0f, 1.0f);
 		ImGui::SliderFloat("SpecularK", &material.Ks, 0.0f, 1.0f);
 		ImGui::SliderFloat("Shininess", &material.Shininess, 2.0f, 1024.0f);
+	}
+
+	if (ImGui::Button("Toggle Edge Detect")) {
+		edge.enabled = !edge.enabled;
 	}
 
 	ImGui::End();
