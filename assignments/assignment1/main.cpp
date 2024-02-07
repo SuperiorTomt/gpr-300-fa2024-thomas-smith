@@ -47,7 +47,7 @@ int main() {
 
 	// Init shaders and model
 	ew::Shader litShader = ew::Shader("assets/lit.vert", "assets/lit.frag");
-	ew::Shader convolutionShader = ew::Shader("assets/blur.vert", "assets/blur.frag");
+	ew::Shader convolutionShader = ew::Shader("assets/edge.vert", "assets/edge.frag");
 	ew::Model monkeyModel = ew::Model("assets/suzanne.obj");
 
 	// Setup Camera
