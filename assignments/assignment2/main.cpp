@@ -22,9 +22,12 @@ GLFWwindow* initWindow(const char* title, int width, int height);
 void drawUI();
 
 ew::Camera camera;
+ew::Camera shadowCam;
 ew::CameraController cameraController;
 ew::Transform monkeyTransform;
 ew::Transform planeTransform;
+
+glm::uint shadowMap;
 
 //Global state
 int screenWidth = 1080;
@@ -51,6 +54,7 @@ int main() {
 	// Init shaders and model
 	ew::Shader litShader = ew::Shader("assets/lit.vert", "assets/lit.frag");
 	ew::Shader convolutionShader = ew::Shader("assets/edge.vert", "assets/edge.frag");
+	ew::Shader depthShader = ew::Shader("assets/depthOnly.vert", "assets/depthOnly.frag");
 	ew::Model monkeyModel = ew::Model("assets/suzanne.obj");
 	ew::Mesh planeMesh = ew::Mesh(ew::createPlane(10, 10, 5));
 
@@ -65,9 +69,15 @@ int main() {
 	// Create Framebuffer
 	tslib::Framebuffer fb = tslib::createFramebuffer(screenWidth, screenHeight, GL_RGBA16);
 
+	// Check for complete framebuffer
+	GLenum fboStatus = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+	if (fboStatus != GL_FRAMEBUFFER_COMPLETE) {
+		printf("Framebuffer incomplete: %d", fboStatus);
+	}
+
 	// Create Shadowmap
 	glm::uint shadowFBO;
-	glm::uint shadowMap;
+	//glm::uint shadowMap;
 	glCreateFramebuffers(1, &shadowFBO);
 	glBindFramebuffer(GL_FRAMEBUFFER, shadowFBO);
 	glGenTextures(1, &shadowMap);
@@ -84,11 +94,12 @@ int main() {
 	glDrawBuffer(GL_NONE);
 	glReadBuffer(GL_NONE);
 
-	// Check for complete framebuffer
-	GLenum fboStatus = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-	if (fboStatus != GL_FRAMEBUFFER_COMPLETE) {
-		printf("Framebuffer incomplete: %d", fboStatus);
-	}
+	// Setup Shadow Camera
+	shadowCam.target = glm::vec3(0, 0, 0);
+	shadowCam.position = glm::vec3(5, 5, 5);
+	shadowCam.orthographic = true;
+	shadowCam.orthoHeight = 20.0;
+	shadowCam.aspectRatio = 1.0;
 
 	// Create Dummy VAO
 	unsigned int dummyVAO;
@@ -116,10 +127,21 @@ int main() {
 		// Rotate model around Y axis
 		monkeyTransform.rotation = glm::rotate(monkeyTransform.rotation, deltaTime, glm::vec3(0.0, 1.0, 0.0));
 
+		// Render Shadow Map
+		depthShader.use();
+		depthShader.setMat4("_ViewProjection", shadowCam.projectionMatrix() * camera.viewMatrix());
+		glBindFramebuffer(GL_FRAMEBUFFER, shadowFBO);
+		glViewport(0, 0, shadowMapResolution, shadowMapResolution);
+		glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
+		glClear(GL_DEPTH_BUFFER_BIT);
+
+		depthShader.setMat4("_Model", monkeyTransform.modelMatrix());
+		monkeyModel.draw();
+
 		// Bind framebuffer
 		glBindFramebuffer(GL_FRAMEBUFFER, fb.fbo);
 		glViewport(0, 0, fb.width, fb.height);
-		glClearColor(0.6f,0.8f,0.92f,1.0f);
+		glClearColor(0.6f, 0.8f, 0.92f, 1.0f);
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
 		//Bind brick texture to texture unit 0 
@@ -151,7 +173,6 @@ int main() {
 		convolutionShader.use();
 		convolutionShader.setInt("_Enabled", edge.enabled);
 
-
 		glBindTextureUnit(0, fb.colorBuffer);
 		glBindVertexArray(dummyVAO);
 		glDrawArrays(GL_TRIANGLES, 0, 3);
@@ -163,6 +184,7 @@ int main() {
 	}
 
 	glad_glDeleteFramebuffers(1, &fb.fbo);
+	glad_glDeleteFramebuffers(1, &shadowFBO);
 
 	printf("Shutting down...");
 }
@@ -194,6 +216,17 @@ void drawUI() {
 		edge.enabled = !edge.enabled;
 	}
 
+	ImGui::End();
+
+	ImGui::Begin("Shadow Map");
+	//Using a Child allow to fill all the space of the window.
+	ImGui::BeginChild("Shadow Map");
+	//Stretch image to be window size
+	ImVec2 windowSize = ImGui::GetWindowSize();
+	//Invert 0-1 V to flip vertically for ImGui display
+	//shadowMap is the texture2D handle
+	ImGui::Image((ImTextureID)shadowMap, windowSize, ImVec2(0, 1), ImVec2(1, 0));
+	ImGui::EndChild();
 	ImGui::End();
 
 	ImGui::Render();
