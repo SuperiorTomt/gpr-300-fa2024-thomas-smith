@@ -11,6 +11,7 @@
 #include <ew/procGen.h>
 
 #include <tslib/framebuffer.h>
+#include <tslib/shadowbuffer.h>
 
 #include <GLFW/glfw3.h>
 #include <imgui.h>
@@ -27,14 +28,14 @@ ew::CameraController cameraController;
 ew::Transform monkeyTransform;
 ew::Transform planeTransform;
 
-glm::uint shadowMap;
-
-//Global state
+// Global state
 int screenWidth = 1080;
 int screenHeight = 720;
 float prevFrameTime;
 float deltaTime;
 int shadowMapResolution = 2048;
+
+tslib::Shadowbuffer sb;
 
 struct Material {
 	float Ka = 1.0;
@@ -46,6 +47,10 @@ struct Material {
 struct EdgeDetect {
 	bool enabled = 0;
 }edge;
+
+struct LightDirection {
+	glm::vec3 lightDirection = glm::vec3(-1.0, -1.0, 0.0);
+}lightDirection;
 
 int main() {
 	GLFWwindow* window = initWindow("Assignment 0", screenWidth, screenHeight);
@@ -75,30 +80,14 @@ int main() {
 		printf("Framebuffer incomplete: %d", fboStatus);
 	}
 
-	// Create Shadowmap
-	glm::uint shadowFBO;
-	//glm::uint shadowMap;
-	glCreateFramebuffers(1, &shadowFBO);
-	glBindFramebuffer(GL_FRAMEBUFFER, shadowFBO);
-	glGenTextures(1, &shadowMap);
-	glBindTexture(GL_TEXTURE_2D, shadowMap);
-	glTexStorage2D(GL_TEXTURE_2D, 1, GL_DEPTH_COMPONENT16, shadowMapResolution, shadowMapResolution);
-
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
-	float borderColor[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
-	glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, borderColor);
-
-	glDrawBuffer(GL_NONE);
-	glReadBuffer(GL_NONE);
+	// Create Shadowbuffer
+	sb = tslib::createShadowbuffer(shadowMapResolution);
 
 	// Setup Shadow Camera
+	shadowCam.position = glm::vec3(3, 3, 3);
 	shadowCam.target = glm::vec3(0, 0, 0);
-	shadowCam.position = glm::vec3(5, 5, 5);
 	shadowCam.orthographic = true;
-	shadowCam.orthoHeight = 20.0;
+	shadowCam.orthoHeight = 5.0;
 	shadowCam.aspectRatio = 1.0;
 
 	// Create Dummy VAO
@@ -129,11 +118,14 @@ int main() {
 
 		// Render Shadow Map
 		depthShader.use();
-		depthShader.setMat4("_ViewProjection", shadowCam.projectionMatrix() * camera.viewMatrix());
-		glBindFramebuffer(GL_FRAMEBUFFER, shadowFBO);
-		glViewport(0, 0, shadowMapResolution, shadowMapResolution);
+		depthShader.setMat4("_ViewProjection", shadowCam.projectionMatrix() * shadowCam.viewMatrix());
+		glBindFramebuffer(GL_FRAMEBUFFER, sb.fbo);
+		glViewport(0, 0, sb.resolution, sb.resolution);
 		glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
 		glClear(GL_DEPTH_BUFFER_BIT);
+
+		glDrawBuffer(GL_NONE);
+		glReadBuffer(GL_NONE);
 
 		depthShader.setMat4("_Model", monkeyTransform.modelMatrix());
 		monkeyModel.draw();
@@ -184,7 +176,7 @@ int main() {
 	}
 
 	glad_glDeleteFramebuffers(1, &fb.fbo);
-	glad_glDeleteFramebuffers(1, &shadowFBO);
+	glad_glDeleteFramebuffers(1, &sb.fbo);
 
 	printf("Shutting down...");
 }
@@ -225,7 +217,7 @@ void drawUI() {
 	ImVec2 windowSize = ImGui::GetWindowSize();
 	//Invert 0-1 V to flip vertically for ImGui display
 	//shadowMap is the texture2D handle
-	ImGui::Image((ImTextureID)shadowMap, windowSize, ImVec2(0, 1), ImVec2(1, 0));
+	ImGui::Image((ImTextureID)sb.shadowMap, windowSize, ImVec2(0, 1), ImVec2(1, 0));
 	ImGui::EndChild();
 	ImGui::End();
 
