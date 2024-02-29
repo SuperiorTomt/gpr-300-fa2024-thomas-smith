@@ -124,7 +124,7 @@ int main() {
 		glBindFramebuffer(GL_FRAMEBUFFER, sb.fbo);
 		glViewport(0, 0, sb.resolution, sb.resolution);
 		glClear(GL_DEPTH_BUFFER_BIT);
-		glCullFace(GL_FRONT);
+		//glCullFace(GL_FRONT);
 
 		depthShader.use();
 		depthShader.setMat4("_ViewProjection", shadowCam.projectionMatrix() * shadowCam.viewMatrix());
@@ -139,17 +139,14 @@ int main() {
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 		glCullFace(GL_BACK);
 
-		//Bind brick texture to texture unit 0 
-		glActiveTexture(GL_TEXTURE0);
-		glBindTexture(GL_TEXTURE_2D, brickTexture);
-
-		//Make "_MainTex" sampler2D sample from the 2D texture bound to unit 0
+		// Bind shadowmap and set up scene
+		glBindTextureUnit(1, sb.shadowMap);
 		litShader.use();
 		litShader.setVec3("_EyePos", camera.position);
 		litShader.setInt("_MainTex", 0);
 		litShader.setMat4("_ViewProjection", camera.projectionMatrix() * camera.viewMatrix());
 
-		litShader.setInt("_ShadowMap", 0);
+		litShader.setInt("_ShadowMap", 1);
 		litShader.setMat4("_LightViewProj", shadowCam.projectionMatrix() * shadowCam.viewMatrix());
 		litShader.setVec3("_LightDirection", light.lightDirection);
 		litShader.setVec3("_LightColor", light.lightColor);		
@@ -158,6 +155,10 @@ int main() {
 		litShader.setFloat("_Material.Kd", material.Kd);
 		litShader.setFloat("_Material.Ks", material.Ks);
 		litShader.setFloat("_Material.Shininess", material.Shininess);
+
+		//Bind brick texture and draw scene
+		glActiveTexture(GL_TEXTURE0);
+		glBindTexture(GL_TEXTURE_2D, brickTexture);
 
 		litShader.setMat4("_Model", monkeyTransform.modelMatrix());
 		monkeyModel.draw();
@@ -212,11 +213,11 @@ void drawUI() {
 		ImGui::SliderFloat("Shininess", &material.Shininess, 2.0f, 1024.0f);
 	}
 
-	if (ImGui::CollapsingHeader("Light Position"))
+	if (ImGui::CollapsingHeader("Light Direction"))
 	{
-		ImGui::SliderFloat("X", &light.lightDirection.x, -5.0f, 5.0f);
-		ImGui::SliderFloat("Y", &light.lightDirection.y, -5.0f, 5.0f);
-		ImGui::SliderFloat("Z", &light.lightDirection.z, -5.0f, 5.0f);
+		ImGui::SliderFloat("X", &light.lightDirection.x, -2.0f, 2.0f);
+		ImGui::SliderFloat("Y", &light.lightDirection.y, -2.0f, 2.0f);
+		ImGui::SliderFloat("Z", &light.lightDirection.z, -2.0f, 2.0f);
 	}
 
 	if (ImGui::Button("Toggle Edge Detect")) {

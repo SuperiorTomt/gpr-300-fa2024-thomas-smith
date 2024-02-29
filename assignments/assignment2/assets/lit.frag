@@ -14,6 +14,9 @@ uniform vec3 _LightColor;
 uniform vec3 _AmbientColor = vec3(0.3,0.4,0.46);
 uniform sampler2D _ShadowMap;
 
+uniform float _MinBias;
+uniform float _MaxBias;
+
 struct Material{
 	float Ka; //Ambient coefficient (0-1)
 	float Kd; //Diffuse coefficient (0-1)
@@ -23,14 +26,32 @@ struct Material{
 uniform Material _Material;
 
 float calcShadow(sampler2D shadowMap, vec4 lightSpacePos){
+	// calculate slope scale bias
+	float minBias = 0.005; 
+	float maxBias = 0.015;
+	float bias = max(maxBias * (1.0 - dot(fs_in.WorldNormal, -_LightDirection)),minBias);
+
 	//Homogeneous Clip space to NDC [-w,w] to [-1,1]
     vec3 sampleCoord = lightSpacePos.xyz / lightSpacePos.w;
     //Convert from [-1,1] to [0,1]
     sampleCoord = sampleCoord * 0.5 + 0.5;
-	float myDepth = sampleCoord.z; 
+	float myDepth = sampleCoord.z - bias; 
 	float shadowMapDepth = texture(shadowMap, sampleCoord.xy).r;
-	//step(a,b) returns 1.0 if a >= b, 0.0 otherwise
-	return step(shadowMapDepth,myDepth);
+
+	// PCF filtering
+	float totalShadow = 0;
+
+	vec2 texelOffset = 1.0 /  textureSize(_ShadowMap,0);
+	for (int y = -1; y <=1; y++) {
+		for (int x = -1; x <=1; x++) {
+			vec2 uv = sampleCoord.xy + vec2(x * texelOffset.x, y * texelOffset.y);
+			totalShadow += step(shadowMapDepth, myDepth);
+		}
+	}
+
+	totalShadow /= 9.0;
+
+	return totalShadow;
 }
 
 
