@@ -48,9 +48,10 @@ struct EdgeDetect {
 	bool enabled = 0;
 }edge;
 
-struct LightDirection {
-	glm::vec3 lightDirection = glm::vec3(-1.0, -1.0, 0.0);
-}lightDirection;
+struct Light {
+	glm::vec3 lightDirection = glm::vec3(-1.0, -1.0, -1.0);
+	glm::vec3 lightColor = glm::vec3(1);
+}light;
 
 int main() {
 	GLFWwindow* window = initWindow("Assignment 0", screenWidth, screenHeight);
@@ -84,10 +85,12 @@ int main() {
 	sb = tslib::createShadowbuffer(shadowMapResolution);
 
 	// Setup Shadow Camera
-	shadowCam.position = glm::vec3(3, 3, 3);
 	shadowCam.target = glm::vec3(0, 0, 0);
+	shadowCam.position = shadowCam.target - light.lightDirection * 5.0f;
 	shadowCam.orthographic = true;
 	shadowCam.orthoHeight = 5.0;
+	shadowCam.nearPlane = 0.01f;
+	shadowCam.farPlane = 20.0f;
 	shadowCam.aspectRatio = 1.0;
 
 	// Create Dummy VAO
@@ -112,20 +115,19 @@ int main() {
 		prevFrameTime = time;
 
 		cameraController.move(window, &camera, deltaTime);
+		shadowCam.position = shadowCam.target - light.lightDirection * 5.0f;
 
 		// Rotate model around Y axis
 		monkeyTransform.rotation = glm::rotate(monkeyTransform.rotation, deltaTime, glm::vec3(0.0, 1.0, 0.0));
 
 		// Render Shadow Map
-		depthShader.use();
-		depthShader.setMat4("_ViewProjection", shadowCam.projectionMatrix() * shadowCam.viewMatrix());
 		glBindFramebuffer(GL_FRAMEBUFFER, sb.fbo);
 		glViewport(0, 0, sb.resolution, sb.resolution);
-		glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
 		glClear(GL_DEPTH_BUFFER_BIT);
+		glCullFace(GL_FRONT);
 
-		glDrawBuffer(GL_NONE);
-		glReadBuffer(GL_NONE);
+		depthShader.use();
+		depthShader.setMat4("_ViewProjection", shadowCam.projectionMatrix() * shadowCam.viewMatrix());
 
 		depthShader.setMat4("_Model", monkeyTransform.modelMatrix());
 		monkeyModel.draw();
@@ -135,6 +137,7 @@ int main() {
 		glViewport(0, 0, fb.width, fb.height);
 		glClearColor(0.6f, 0.8f, 0.92f, 1.0f);
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+		glCullFace(GL_BACK);
 
 		//Bind brick texture to texture unit 0 
 		glActiveTexture(GL_TEXTURE0);
@@ -145,6 +148,11 @@ int main() {
 		litShader.setVec3("_EyePos", camera.position);
 		litShader.setInt("_MainTex", 0);
 		litShader.setMat4("_ViewProjection", camera.projectionMatrix() * camera.viewMatrix());
+
+		litShader.setInt("_ShadowMap", 0);
+		litShader.setMat4("_LightViewProj", shadowCam.projectionMatrix() * shadowCam.viewMatrix());
+		litShader.setVec3("_LightDirection", light.lightDirection);
+		litShader.setVec3("_LightColor", light.lightColor);		
 
 		litShader.setFloat("_Material.Ka", material.Ka);
 		litShader.setFloat("_Material.Kd", material.Kd);
@@ -202,6 +210,13 @@ void drawUI() {
 		ImGui::SliderFloat("DiffuseK", &material.Kd, 0.0f, 1.0f);
 		ImGui::SliderFloat("SpecularK", &material.Ks, 0.0f, 1.0f);
 		ImGui::SliderFloat("Shininess", &material.Shininess, 2.0f, 1024.0f);
+	}
+
+	if (ImGui::CollapsingHeader("Light Position"))
+	{
+		ImGui::SliderFloat("X", &light.lightDirection.x, -5.0f, 5.0f);
+		ImGui::SliderFloat("Y", &light.lightDirection.y, -5.0f, 5.0f);
+		ImGui::SliderFloat("Z", &light.lightDirection.z, -5.0f, 5.0f);
 	}
 
 	if (ImGui::Button("Toggle Edge Detect")) {
