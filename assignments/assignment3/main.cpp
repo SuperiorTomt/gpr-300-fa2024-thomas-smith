@@ -54,18 +54,29 @@ struct Light {
 	glm::vec3 lightColor = glm::vec3(1);
 }light;
 
+struct PointLight {
+	glm::vec3 position;
+	float radius;
+	glm::vec4 color;
+};
+const int MAX_POINT_LIGHTS = 64;
+PointLight pointLights[MAX_POINT_LIGHTS];
+
 int main() {
 	GLFWwindow* window = initWindow("Assignment 0", screenWidth, screenHeight);
 	glfwSetFramebufferSizeCallback(window, framebufferSizeCallback);
 
 	// Init shaders and model
-	ew::Shader litShader = ew::Shader("assets/lit.vert", "assets/lit.frag");
+	ew::Shader deferredShader = ew::Shader("assets/deferredLit.vert", "assets/deferredLit.frag");
 	ew::Shader convolutionShader = ew::Shader("assets/edge.vert", "assets/edge.frag");
 	ew::Shader depthShader = ew::Shader("assets/depthOnly.vert", "assets/depthOnly.frag");
+	ew::Shader gBufferShader = ew::Shader("assets/lit.vert", "assets/geometryPass.frag");
+	ew::Shader lightOrbShader = ew::Shader("assets/lightOrb.vert", "assets/lightOrb.frag");
 	ew::Model monkeyModel = ew::Model("assets/suzanne.obj");
-	ew::Mesh planeMesh = ew::Mesh(ew::createPlane(10, 10, 5));
+	ew::Mesh planeMesh = ew::Mesh(ew::createPlane(40, 40, 5));
+	ew::Mesh sphereMesh = ew::Mesh(ew::createSphere(1.0f, 8));
 
-	planeTransform.position += glm::vec3(0.0, -2.0, 0.0);
+	planeTransform.position = glm::vec3(17.5, -1.0, 17.5);
 
 	// Setup Camera
 	camera.position = glm::vec3(0.0f, 0.0f, 5.0f);
@@ -82,16 +93,25 @@ int main() {
 		printf("Framebuffer incomplete: %d", fboStatus);
 	}
 
+	// Init Point Lights
+	for (int i = 0; i < 8; i++) {
+		for (int j = 0; j < 8; j++) {
+			pointLights[i * 8 + j].color = glm::vec4(rand() % 4, rand() % 4, rand() % 4, 1);
+			pointLights[i * 8 + j].radius = 6.0f;
+			pointLights[i * 8 + j].position = glm::vec3((i * 5) + 2.5f, -0.5, (j * 5) + 2.5f);
+		}
+	}
+
 	// Create Shadowbuffer
 	sb = tslib::createShadowbuffer(shadowMapResolution);
 
 	// Setup Shadow Camera
-	shadowCam.target = glm::vec3(0, 0, 0);
-	shadowCam.position = shadowCam.target - light.lightDirection * 5.0f;
+	shadowCam.target = planeTransform.position;
+	shadowCam.position = shadowCam.target - light.lightDirection * 15.0f;
 	shadowCam.orthographic = true;
-	shadowCam.orthoHeight = 5.0;
+	shadowCam.orthoHeight = 50.0;
 	shadowCam.nearPlane = 0.01f;
-	shadowCam.farPlane = 20.0f;
+	shadowCam.farPlane = 50.0f;
 	shadowCam.aspectRatio = 1.0;
 
 	// Create GBuffer
@@ -101,8 +121,9 @@ int main() {
 	unsigned int dummyVAO;
 	glCreateVertexArrays(1, &dummyVAO);
 
-	// Handles to OpenGL object are unsigned integers
-	GLuint brickTexture = ew::loadTexture("assets/brick_color.jpg");
+	// Load Textures
+	GLuint monkeyTexture = ew::loadTexture("assets/cork.jpg");
+	GLuint groundTexture = ew::loadTexture("assets/brick_color.jpg");
 
 	GLenum attachments[] = { GL_COLOR_ATTACHMENT0 };
 	glDrawBuffers(1, attachments);
@@ -119,7 +140,7 @@ int main() {
 		prevFrameTime = time;
 
 		cameraController.move(window, &camera, deltaTime);
-		shadowCam.position = shadowCam.target - light.lightDirection * 5.0f;
+		shadowCam.position = shadowCam.target - light.lightDirection * 15.0f;
 
 		// Rotate model around Y axis
 		monkeyTransform.rotation = glm::rotate(monkeyTransform.rotation, deltaTime, glm::vec3(0.0, 1.0, 0.0));
@@ -128,13 +149,45 @@ int main() {
 		glBindFramebuffer(GL_FRAMEBUFFER, sb.fbo);
 		glViewport(0, 0, sb.resolution, sb.resolution);
 		glClear(GL_DEPTH_BUFFER_BIT);
-		//glCullFace(GL_FRONT);
 
 		depthShader.use();
 		depthShader.setMat4("_ViewProjection", shadowCam.projectionMatrix() * shadowCam.viewMatrix());
 
-		depthShader.setMat4("_Model", monkeyTransform.modelMatrix());
-		monkeyModel.draw();
+		for (int i = 0; i < 8; i++) {
+			for (int j = 0; j < 8; j++) {
+				monkeyTransform.position = glm::vec3(i * 5, 0, j * 5);
+				depthShader.setInt("_MainTex", 0);
+				depthShader.setMat4("_Model", monkeyTransform.modelMatrix());
+				monkeyModel.draw();
+			}
+		}
+
+		// Bind textures
+		glBindTextureUnit(0, monkeyTexture);
+		glBindTextureUnit(1, groundTexture);
+		glBindTextureUnit(2, sb.shadowMap);
+
+		// Render to G-Buffer
+		glBindFramebuffer(GL_FRAMEBUFFER, gb.fbo);
+		glViewport(0, 0, gb.width, gb.height);
+		glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+		gBufferShader.use();
+		gBufferShader.setMat4("_ViewProjection", camera.projectionMatrix() * camera.viewMatrix());
+
+		for (int i = 0; i < 8; i++) {
+			for (int j = 0; j < 8; j++) {
+				monkeyTransform.position = glm::vec3(i * 5, 0, j * 5);
+				gBufferShader.setInt("_MainTex", 0);
+				gBufferShader.setMat4("_Model", monkeyTransform.modelMatrix());
+				monkeyModel.draw();
+			}
+		}
+
+		gBufferShader.setInt("_MainTex", 1);
+		gBufferShader.setMat4("_Model", planeTransform.modelMatrix());
+		planeMesh.draw();
 
 		// Bind framebuffer
 		glBindFramebuffer(GL_FRAMEBUFFER, fb.fbo);
@@ -143,32 +196,53 @@ int main() {
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 		glCullFace(GL_BACK);
 
-		// Bind shadowmap and set up scene
-		glBindTextureUnit(1, sb.shadowMap);
-		litShader.use();
-		litShader.setVec3("_EyePos", camera.position);
-		litShader.setInt("_MainTex", 0);
-		litShader.setMat4("_ViewProjection", camera.projectionMatrix() * camera.viewMatrix());
+		// Shader Setup
+		deferredShader.use();
 
-		litShader.setInt("_ShadowMap", 1);
-		litShader.setMat4("_LightViewProj", shadowCam.projectionMatrix() * shadowCam.viewMatrix());
-		litShader.setVec3("_LightDirection", light.lightDirection);
-		litShader.setVec3("_LightColor", light.lightColor);		
+		deferredShader.setInt("_ShadowMap", 3);
+		deferredShader.setVec3("_EyePos", camera.position);
+		deferredShader.setMat4("_ViewProjection", camera.projectionMatrix() * camera.viewMatrix());
+		deferredShader.setMat4("_LightViewProj", shadowCam.projectionMatrix() * shadowCam.viewMatrix());
+		deferredShader.setVec3("_LightDirection", light.lightDirection);
+		deferredShader.setVec3("_LightColor", light.lightColor);
 
-		litShader.setFloat("_Material.Ka", material.Ka);
-		litShader.setFloat("_Material.Kd", material.Kd);
-		litShader.setFloat("_Material.Ks", material.Ks);
-		litShader.setFloat("_Material.Shininess", material.Shininess);
+		deferredShader.setFloat("_Material.Ka", material.Ka);
+		deferredShader.setFloat("_Material.Kd", material.Kd);
+		deferredShader.setFloat("_Material.Ks", material.Ks);
+		deferredShader.setFloat("_Material.Shininess", material.Shininess);
 
-		//Bind brick texture and draw scene
-		glActiveTexture(GL_TEXTURE0);
-		glBindTexture(GL_TEXTURE_2D, brickTexture);
+		for (int i = 0; i < MAX_POINT_LIGHTS; i++) {
+			std::string prefix = "_PointLights[" + std::to_string(i) + "].";
+			deferredShader.setVec3(prefix + "position", pointLights[i].position);
+			deferredShader.setFloat(prefix + "radius", pointLights[i].radius);
+			deferredShader.setVec4(prefix + "color", pointLights[i].color);
+		}
 
-		litShader.setMat4("_Model", monkeyTransform.modelMatrix());
-		monkeyModel.draw();
+		glBindTextureUnit(0, gb.colorBuffers[0]);
+		glBindTextureUnit(1, gb.colorBuffers[1]);
+		glBindTextureUnit(2, gb.colorBuffers[2]);
+		glBindTextureUnit(3, sb.shadowMap);
+		
+		glBindVertexArray(dummyVAO);
+		glDrawArrays(GL_TRIANGLES, 0, 3);
 
-		litShader.setMat4("_Model", planeTransform.modelMatrix());
-		planeMesh.draw();
+		// Draw Orbs
+		glBindFramebuffer(GL_READ_FRAMEBUFFER, gb.fbo);
+		glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fb.fbo);
+		glBlitFramebuffer(0, 0, screenWidth, screenHeight, 0, 0, screenWidth, screenHeight, GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+
+		lightOrbShader.use();
+		lightOrbShader.setMat4("_ViewProjection", camera.projectionMatrix() * camera.viewMatrix());
+		for (int i = 0; i < MAX_POINT_LIGHTS; i++)
+		{
+			glm::mat4 m = glm::mat4(1.0f);
+			m = glm::translate(m, pointLights[i].position);
+			m = glm::scale(m, glm::vec3(0.3f));
+
+			lightOrbShader.setMat4("_Model", m);
+			lightOrbShader.setVec3("_Color", pointLights[i].color);
+			sphereMesh.draw();
+		}
 
 		// Bind
 		glBindFramebuffer(GL_FRAMEBUFFER, 0);

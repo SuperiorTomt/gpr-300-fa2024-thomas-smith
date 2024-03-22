@@ -68,8 +68,11 @@ namespace tslib {
 				GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2
 		};
 		glDrawBuffers(3, drawBuffers);
-		//TODO: Add texture2D depth buffer
-		//TODO: Check for completeness
+
+		glGenTextures(1, &framebuffer.depthBuffer);
+		glBindTexture(GL_TEXTURE_2D, framebuffer.depthBuffer);
+		glTexStorage2D(GL_TEXTURE_2D, 1, GL_DEPTH_COMPONENT16, width, height);
+		glFramebufferTexture(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, framebuffer.depthBuffer, 0);
 
 		glBindTexture(GL_TEXTURE_2D, 0);
 		glBindFramebuffer(GL_FRAMEBUFFER, 0);
