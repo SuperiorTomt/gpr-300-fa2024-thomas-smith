@@ -62,29 +62,102 @@ struct PointLight {
 const int MAX_POINT_LIGHTS = 64;
 PointLight pointLights[MAX_POINT_LIGHTS];
 
-struct Node {
-	glm::vec3 localPosition;
-	glm::quat localRotation;
-	glm::vec3 localScale;
+struct KeyFrame {
+	glm::vec3 position;
+	glm::quat rotation;
+	glm::vec3 scale;
+	float time;
+};
 
+float InvLerp(float prevTime, float nextTime, float currentTime) {
+	float t = (currentTime - prevTime) / (nextTime - prevTime);
+
+	return t;
+}
+
+glm::vec3 Lerp(glm::vec3 prevKey, glm::vec3 nextKey, float time) {
+	glm::vec3 v = ((nextKey - prevKey) * time) + prevKey;
+
+	return v;
+}
+
+glm::quat Slerp(glm::quat q1, glm::quat q2, float t) {
+	float angle = acos(dot(q1, q2));
+	float denom = sin(angle);
+
+	if (denom == 0)
+		return q1;
+
+	return (q1 * sin((1 - t) * angle) + q2 * sin(t * angle)) / denom;
+}
+
+glm::mat4 CalcTransform(glm::vec3 position, glm::quat rotation, glm::vec3 scale) {
+	glm::mat4 m = glm::mat4(1.0f);
+	m = glm::translate(m, position);
+	m *= glm::mat4_cast(rotation);
+	m = glm::scale(m, scale);
+
+	return m;
+}
+
+struct AnimationClip {
+	KeyFrame keyFrames[10];
+	int numKeyFrames = 0;
+	float localTime = 0.0f;
+	float duration;
+
+	glm::mat4 Update(float dt) {
+		localTime += dt;
+
+		if (localTime > duration)
+			localTime = 0.0f;
+
+		glm::vec3 newPos = glm::vec3(0);
+		glm::quat newRot = glm::quat(1, 0, 0, 0);
+		glm::vec3 newScale = glm::vec3(1);
+
+		for (int i = 0; i < numKeyFrames; i++) {
+			if (keyFrames[i].time > localTime) {
+				float t = InvLerp(keyFrames[i - 1].time, keyFrames[i].time, localTime);
+				newPos = Lerp(keyFrames[i - 1].position, keyFrames[i].position, t);
+				newRot = Slerp(keyFrames[i - 1].rotation, keyFrames[i].rotation, t);
+				newScale = Lerp(keyFrames[i - 1].scale, keyFrames[i].scale, t);
+
+				break;
+			}
+		}
+
+		return CalcTransform(newPos, newRot, newScale);
+	}
+};
+
+void AddFrameToAnim(AnimationClip* anim, float time, glm::vec3 position, glm::quat rotation, glm::vec3 scale) {
+	KeyFrame newFrame;
+	newFrame.time = time;
+	newFrame.position = position;
+	newFrame.rotation = rotation;
+	newFrame.scale = scale;
+
+	if (anim->duration < time)
+		anim->duration = time;
+	anim->keyFrames[anim->numKeyFrames] = newFrame;
+	anim->numKeyFrames++;
+}
+
+struct Node {
 	glm::mat4 localTransform;
 	glm::mat4 globalTransform;
 	Node* parent;
-	Node* children[5];
+	Node* children[10];
 	unsigned int numChildren;
-};
 
-void CalcLocalTransformsRecursive(Node* node) {
-	glm::mat4 m = glm::mat4(1.0f);
-	m = glm::translate(m, node->localPosition);
-	m *= glm::mat4_cast(node->localRotation);
-	m = glm::scale(m, node->localScale);
-	node->localTransform = m;
+	AnimationClip animation;
 
-	for (int i = 0; i < node->numChildren; i++) {
-		CalcLocalTransformsRecursive(node->children[i]);
+	void Update(float dt) {
+		if (animation.numKeyFrames != 0)
+			localTransform = animation.Update(dt);
 	}
-}
+};
 
 void SolveFKRecursive(Node* node) {
 	if (node->parent == NULL)
@@ -96,13 +169,27 @@ void SolveFKRecursive(Node* node) {
 	}
 }
 
+Node* AddNode(Node* parent, AnimationClip anim) {
+	Node* newNode = new Node;
+
+	newNode->parent = parent;
+	newNode->numChildren = 0;
+	newNode->animation = anim;
+	newNode->localTransform = CalcTransform(anim.keyFrames[0].position, anim.keyFrames[0].rotation, anim.keyFrames[0].scale);
+
+	if (parent != NULL) {
+		parent->children[parent->numChildren] = newNode;
+		parent->numChildren++;
+	}
+
+	return newNode;
+}
+
 Node* AddNode(Node* parent, glm::vec3 position, glm::quat rotation, glm::vec3 scale) {
 	Node* newNode = new Node;
 
 	newNode->parent = parent;
-	newNode->localPosition = position;
-	newNode->localRotation = rotation;
-	newNode->localScale = scale;
+	newNode->localTransform = CalcTransform(position, rotation, scale);
 	newNode->numChildren = 0;
 
 	if (parent != NULL) {
@@ -113,11 +200,32 @@ Node* AddNode(Node* parent, glm::vec3 position, glm::quat rotation, glm::vec3 sc
 	return newNode;
 }
 
+//void CalcLocalTransformsRecursive(Node* node) {
+//	glm::mat4 m = glm::mat4(1.0f);
+//	m = glm::translate(m, node->localPosition);
+//	m *= glm::mat4_cast(node->localRotation);
+//	m = glm::scale(m, node->localScale);
+//	node->localTransform = m;
+//
+//	for (int i = 0; i < node->numChildren; i++) {
+//		CalcLocalTransformsRecursive(node->children[i]);
+//	}
+//}
+
+void UpdateAnimsRecursive(Node* node, float dt) {
+	node->Update(dt);
+
+	for (int i = 0; i < node->numChildren; i++)
+		UpdateAnimsRecursive(node->children[i], dt);
+}
+
 void DrawNodesRecursive(ew::Shader shader, ew::Model model, Node* node) {
-	monkeyTransform.position = glm::vec3(0, 0, 0);
 	shader.setInt("_MainTex", 0);
-	shader.setMat4("_Model", monkeyTransform.modelMatrix());
+	shader.setMat4("_Model", node->globalTransform);
 	model.draw();
+
+	for (int i = 0; i < node->numChildren; i++)
+		DrawNodesRecursive(shader, model, node->children[i]);
 }
 
 void ClearNodesRecursive(Node* node) {
@@ -197,9 +305,49 @@ int main() {
 	glCullFace(GL_BACK);
 	glEnable(GL_DEPTH_TEST);
 
-	// Setup Hierarchy
-	Node* torso = AddNode(NULL, glm::vec3(0), glm::quat(1, 0, 0, 0), glm::vec3(1));
+	// Setup Mech
+	AnimationClip torsoAnim;
+	AddFrameToAnim(&torsoAnim, 0.0f, glm::vec3(0), glm::quat(1, 0, 0, 0), glm::vec3(1));
+	AddFrameToAnim(&torsoAnim, 1.0f, glm::vec3(0, 2, 0), glm::quat(1, 0, 0, 0), glm::vec3(1));
+	AddFrameToAnim(&torsoAnim, 5.0f, glm::vec3(0), glm::quat(1, 0, 0, 0), glm::vec3(1));
+	Node* torso = AddNode(NULL, torsoAnim);
 
+	AnimationClip propellorBaseAnim;
+	AddFrameToAnim(&propellorBaseAnim, 0.0f, glm::vec3(0, 1.3, 0), glm::quat(1, 0, 0, 0), glm::vec3(0.5));
+	AddFrameToAnim(&propellorBaseAnim, 0.3f, glm::vec3(0, 1.3, 0), glm::quat(0, 0, 1, 0), glm::vec3(0.5));
+	AddFrameToAnim(&propellorBaseAnim, 0.6f, glm::vec3(0, 1.3, 0), glm::quat(-1, 0, 0, 0), glm::vec3(0.5));
+	Node* propellorBase = AddNode(torso, propellorBaseAnim);
+
+	Node* propellorArmL1 = AddNode(propellorBase, glm::vec3(2, 0, 0), glm::quat(0, 0, 1, 0), glm::vec3(.7));
+	Node* propellorArmL2 = AddNode(propellorBase, glm::vec3(4, 0, 0), glm::quat(0, 0, 1, 0), glm::vec3(.7));
+	Node* propellorArmL3 = AddNode(propellorBase, glm::vec3(6, 0, 0), glm::quat(0, 0, 1, 0), glm::vec3(.7));
+	Node* propellorArmR1 = AddNode(propellorBase, glm::vec3(-2, 0, 0), glm::quat(1, 0, 0, 0), glm::vec3(.7));
+	Node* propellorArmR2 = AddNode(propellorBase, glm::vec3(-4, 0, 0), glm::quat(1, 0, 0, 0), glm::vec3(.7));
+	Node* propellorArmR3 = AddNode(propellorBase, glm::vec3(-6, 0, 0), glm::quat(1, 0, 0, 0), glm::vec3(.7));
+
+	AnimationClip hipAnimL;
+	AddFrameToAnim(&hipAnimL, 0.0f, glm::vec3(0.8, -0.8, 0.5), glm::quat(0.924, -0.383, 0, 0), glm::vec3(0.5));
+	AddFrameToAnim(&hipAnimL, 0.4f, glm::vec3(0.8, -0.8, 0.5), glm::quat(0.924, 0.383, 0, 0), glm::vec3(0.5));
+	AddFrameToAnim(&hipAnimL, 0.8f, glm::vec3(0.8, -0.8, 0.5), glm::quat(0.924, -0.383, 0, 0), glm::vec3(0.5));
+	Node* hipL = AddNode(torso, hipAnimL);
+
+	AnimationClip hipAnimR;
+	AddFrameToAnim(&hipAnimR, 0.0f, glm::vec3(-0.8, -0.8, 0.5), glm::quat(0.924, 0.383, 0, 0), glm::vec3(0.5));
+	AddFrameToAnim(&hipAnimR, 0.4f, glm::vec3(-0.8, -0.8, 0.5), glm::quat(0.924, -0.383, 0, 0), glm::vec3(0.5));
+	AddFrameToAnim(&hipAnimR, 0.8f, glm::vec3(-0.8, -0.8, 0.5), glm::quat(0.924, 0.383, 0, 0), glm::vec3(0.5));
+	Node* hipR = AddNode(torso, hipAnimR);
+
+	Node* kneeL = AddNode(hipL, glm::vec3(0, -0.8, 0.5), glm::quat(1, 0, 0, 0), glm::vec3(0.5));
+	Node* kneeR = AddNode(hipR, glm::vec3(0, -0.8, 0.5), glm::quat(1, 0, 0, 0), glm::vec3(0.5));
+
+	AnimationClip ankleAnim;
+	AddFrameToAnim(&ankleAnim, 0.0f, glm::vec3(0, -1.3, 0.5), glm::quat(1, 0, 0, 0), glm::vec3(1));
+	AddFrameToAnim(&ankleAnim, 0.3f, glm::vec3(0, -1.3, 0.5), glm::quat(0, 0, 1, 0), glm::vec3(1));
+	AddFrameToAnim(&ankleAnim, 0.3f, glm::vec3(0, -1.3, 0.5), glm::quat(-1, 0, 0, 0), glm::vec3(1));
+	Node* ankleL = AddNode(kneeL, ankleAnim);
+	Node* ankleR = AddNode(kneeR, ankleAnim);
+
+	// Render Loop
 	while (!glfwWindowShouldClose(window)) {
 		glfwPollEvents();
 
@@ -210,9 +358,9 @@ int main() {
 		cameraController.move(window, &camera, deltaTime);
 		shadowCam.position = shadowCam.target - light.lightDirection * 15.0f;
 
-		// Rotate torso around Y axis
-		torso->localRotation = glm::rotate(torso->localRotation, deltaTime, glm::vec3(0.0, 1.0, 0.0));
-		CalcLocalTransformsRecursive(torso);
+		// Update Animations and Solve Transforms
+		UpdateAnimsRecursive(torso, deltaTime);
+		SolveFKRecursive(torso);
 
 		// Render Shadow Map
 		glBindFramebuffer(GL_FRAMEBUFFER, sb.fbo);
@@ -282,7 +430,7 @@ int main() {
 		glDrawArrays(GL_TRIANGLES, 0, 3);
 
 		// Draw Orbs
-		glBindFramebuffer(GL_READ_FRAMEBUFFER, gb.fbo);
+		/*glBindFramebuffer(GL_READ_FRAMEBUFFER, gb.fbo);
 		glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fb.fbo);
 		glBlitFramebuffer(0, 0, screenWidth, screenHeight, 0, 0, screenWidth, screenHeight, GL_DEPTH_BUFFER_BIT, GL_NEAREST);
 
@@ -297,7 +445,7 @@ int main() {
 			lightOrbShader.setMat4("_Model", m);
 			lightOrbShader.setVec3("_Color", pointLights[i].color);
 			sphereMesh.draw();
-		}
+		}*/
 
 		// Bind
 		glBindFramebuffer(GL_FRAMEBUFFER, 0);
